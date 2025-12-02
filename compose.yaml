@@ -1,0 +1,30 @@
+services:
+  dave:
+    build: .
+    image: dave_app:latest
+    container_name: dave
+    restart: unless-stopped
+
+    # --------------------------------------------------------------------
+    # 1️⃣  Runtime knobs – override the Dockerfile defaults
+    # --------------------------------------------------------------------
+    environment:
+      - GRADIO_PORT=7860          # (unused by demo_zero_gradio.py but kept for future UI)
+      - MODEL_PATH=/app/DAVE/weights
+      - IMAGE_SIZE=384
+      - CUDA_VISIBLE_DEVICES=0    # set to '' if you don’t want to expose a GPU
+
+    ports:
+      - "7860:7860"          # host_port:container_port
+
+
+    # --------------------------------------------------------------------
+    # 2️⃣  Request a GPU – adjust if you’re on Swarm or single‑node Docker‑Compose
+    # --------------------------------------------------------------------
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
