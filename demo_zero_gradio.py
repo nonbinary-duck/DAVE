@@ -55,13 +55,17 @@ def demo(args):
 
     bboxes = torch.zeros((1, 3, 4))
 
-    def one_img(image: Image.Image):
+    def one_img(image: Image.Image, prompts_txt: str):
         scale_x = scale_y = 1
         # image = Image.open(img_path).convert("RGB")
         img, scale = resize(image, args.image_size)
         img = img.unsqueeze(0).to(device)
 
-        denisty_map, _, _, predicted_bboxes = model(img, bboxes=bboxes)
+        # Convert the raw text to a Python list
+        prompts = [p.strip() for p in prompts_txt.splitlines() if p.strip()]
+
+
+        denisty_map, _, _, predicted_bboxes = model(img, bboxes=bboxes, classes=prompts)
 
         if args.two_passes:
             boxes_predicted = predicted_bboxes.box
@@ -121,7 +125,14 @@ def demo(args):
 
     iface = gr.Interface(
         fn=one_img,
-        inputs=gr.Image(type="pil", label="Upload an image"),
+        inputs=[
+            gr.Image(type="pil", label="Upload an image"),
+            gr.Textbox(
+                label="Class Prompts (one per line)",
+                lines=5,          # give it a reasonable height
+                placeholder="e.g.\nperson\ncar\nbicycle",
+            )
+        ],
         outputs=gr.Image(type="pil", label="Output plot"),
         title="DAVE Zero-Shot Counting (Gradio)",
         description=( "Upload an image - the model predicts a density map and bounding boxes." ),

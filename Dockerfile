@@ -67,6 +67,7 @@ EXPOSE ${GRADIO_PORT}
 #     (plain‑text CMD – Docker will invoke /bin/sh -c automatically)
 # ───────────────────────────────────────────────────────────────────────────────
 CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_zero_gradio.py \
+    --prompt_shot \
     --zero_shot \
     --two_passes \
     --skip_train \
