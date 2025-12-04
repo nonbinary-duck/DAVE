@@ -1,161 +1,155 @@
-#!/usr/bin/env python
-# ------------------------------------------------------------------
-# Demo script for the DAVE zero‑shot counting model, exposed via Gradio.
-# Pulls the following env‑vars:
-#   - GRADIO_PORT      : port on which the UI will listen (default 7860)
-#   - MODEL_PATH       : directory with the .pth checkpoints
-#   - IMAGE_SIZE       : default input size (default 384)
-#   - TWO_PASSES       : "1" to enable two‑pass refinement
-# ------------------------------------------------------------------
+import argparse
+from pathlib import Path
 import os
 import torch
-import gradio as gr
-from pathlib import Path
+from torch.nn import DataParallel
 from torchvision import transforms as T
 from PIL import Image
 import matplotlib.pyplot as plt
-import matplotlib
-from utils.arg_parser import get_argparser  # kept for compatibility
+from tqdm import tqdm
+
+from utils.arg_parser import get_argparser
 from models.dave import build_model
 from utils.data import pad_image
-from torch.nn import DataParallel
 
-# ------------------------------------------------------------------
-# 1️⃣  Read configuration once (module import time)
-# ------------------------------------------------------------------
-GRADIO_PORT = int(os.getenv("GRADIO_PORT", "7860"))
-MODEL_PATH  = os.getenv("MODEL_PATH", "/app/DAVE/weights")
-IMAGE_SIZE  = int(os.getenv("IMAGE_SIZE", "384"))
-TWO_PASSES  = os.getenv("TWO_PASSES", "1") == "1"
-DEVICE      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+import gradio as gr
 
-# ------------------------------------------------------------------
-# 2️⃣  Helper: Build & load the model
-# ------------------------------------------------------------------
-def get_model(model_path: str, image_size: int, two_passes: bool) -> torch.nn.Module:
+
+def resize(img, img_size):
+    resize_img = T.Resize((img_size, img_size), antialias=True)
+    w, h = img.size
+    img = T.Compose([
+        T.ToTensor(),
+        resize_img,
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])(img)
+    scale = torch.tensor([1.0, 1.0]) / torch.tensor([w, h]) * img_size
+    return img, scale
+
+
+@torch.no_grad()
+def demo(args):
+    # global fig, ax
+    global model
+
+    dpi = plt.rcParams['figure.dpi']
+    plt.figure()
     gpu = 0
     torch.cuda.set_device(gpu)
     device = torch.device(gpu)
 
-    # Base model
     model = DataParallel(
-        build_model(
-            {
-                "image_size": image_size,
-                "use_appearance": True,
-                "use_objectness": True,
-                "two_passes": two_passes,
-            }
-        ).to(device),
+        build_model(args).to(device),
         device_ids=[gpu],
-        output_device=gpu,
+        output_device=gpu
     )
-
-    # Load the main DAVE checkpoint
-    ckpt = torch.load(os.path.join(model_path, "DAVE_0_shot.pth"), map_location=device)
-    model.load_state_dict(ckpt["model"], strict=False)
-
-    # Load the verification branch
-    ver = torch.load(os.path.join(model_path, "verification.pth"), map_location=device)
-    pretrained_dict_feat = {
-        k.split("feat_comp.")[1]: v
-        for k, v in ver["model"].items()
-        if "feat_comp" in k
-    }
+    model.load_state_dict(
+        torch.load(os.path.join(args.model_path, 'DAVE_0_shot.pth'))['model'], strict=False
+    )
+    pretrained_dict_feat = {k.split("feat_comp.")[1]: v for k, v in
+                            torch.load(os.path.join(args.model_path, 'verification.pth'))[
+                                'model'].items() if 'feat_comp' in k}
     model.module.feat_comp.load_state_dict(pretrained_dict_feat)
-
     model.eval()
-    return model
 
-# ------------------------------------------------------------------
-# 3️⃣  Inference routine
-# ------------------------------------------------------------------
-@torch.no_grad()
-def predict(img: Image.Image) -> plt.Figure:
-    model = get_model(MODEL_PATH, IMAGE_SIZE, TWO_PASSES)
 
-    # Pre‑process
-    preprocess = T.Compose(
-        [
-            T.ToTensor(),
-            T.Resize((IMAGE_SIZE, IMAGE_SIZE), antialias=True),
-            T.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
-        ]
-    )
-    img_t = preprocess(img).unsqueeze(0).to(DEVICE)
+    bboxes = torch.zeros((1, 3, 4))
 
-    # Dummy bbox placeholder (matches the original script)
-    dummy_bboxes = torch.zeros((1, 3, 4), device=DEVICE)
+    def one_img(image: Image.Image):
+        scale_x = scale_y = 1
+        # image = Image.open(img_path).convert("RGB")
+        img, scale = resize(image, args.image_size)
+        img = img.unsqueeze(0).to(device)
 
-    # Forward pass
-    density, _, _, pred_bboxes = model(img_t, bboxes=dummy_bboxes)
+        denisty_map, _, _, predicted_bboxes = model(img, bboxes=bboxes)
 
-    # Two‑pass refinement (optional)
-    if TWO_PASSES:
-        boxes_pred = pred_bboxes.box
-        scale_y = min(
-            1, 50 / (boxes_pred[:, 2] - boxes_pred[:, 0]).mean().item()
-        )
-        scale_x = min(
-            1, 50 / (boxes_pred[:, 3] - boxes_pred[:, 1]).mean().item()
-        )
-        if scale_x < 1 or scale_y < 1:
-            sx = (int(IMAGE_SIZE * scale_x) // 8 * 8) / IMAGE_SIZE
-            sy = (int(IMAGE_SIZE * scale_y) // 8 * 8) / IMAGE_SIZE
-            resize_ = T.Resize((int(IMAGE_SIZE * sy), int(IMAGE_SIZE * sx)), antialias=True)
-            img_resized = resize_(img_t)
-            img_resized = pad_image(img_resized[0]).unsqueeze(0).to(DEVICE)
-            density, _, _, pred_bboxes = model(img_resized, bboxes=dummy_bboxes)
+        if args.two_passes:
+            boxes_predicted = predicted_bboxes.box
+            scale_y = min(1, 50 / (boxes_predicted[:, 2] - boxes_predicted[:, 0]).mean())
+            scale_x = min(1, 50 / (boxes_predicted[:, 3] - boxes_predicted[:, 1]).mean())
 
-    # Post‑process
-    boxes = pred_bboxes.box.cpu().numpy()
-    count = density.sum().item()
+            if scale_x < 1 or scale_y < 1:
+                scale_x = (int(args.image_size * scale_x) // 8 * 8) / args.image_size
+                scale_y = (int(args.image_size * scale_y) // 8 * 8) / args.image_size
+                resize_ = T.Resize((int(args.image_size * scale_x), int(args.image_size * scale_y)), antialias=True)
+                img_resized = resize_(img)
 
-    # Build matplotlib figure
-    fig, ax = plt.subplots(
-        figsize=(img.width / 100, img.height / 100), dpi=100
-    )
-    ax.imshow(img)
-    for box in boxes:
-        x0, y0, x1, y1 = box
-        rect = matplotlib.patches.Rectangle(
-            (x0, y0), x1 - x0, y1 - y0,
-            linewidth=2, edgecolor="red", facecolor="none",
-        )
-        ax.add_patch(rect)
-    ax.set_title(f"Density count: {round(count, 1)}  |  Boxes: {len(boxes)}")
-    ax.axis("off")
-    return fig
+                img_resized = pad_image(img_resized[0]).unsqueeze(0)
 
-# ------------------------------------------------------------------
-# 4️⃣  Gradio wrapper
-# ------------------------------------------------------------------
-def create_interface() -> gr.Interface:
-    return gr.Interface(
-        fn=predict,
-        inputs=gr.Image(type="pil"),
-        outputs="plot",
-        title="DAVE Zero‑Shot Counting",
-        description=(
-            "Upload an image – the model predicts a density map and bounding boxes.\n\n"
-            "Environment variables used:\n"
-            "- `MODEL_PATH` – directory that contains the .pth checkpoints\n"
-            "- `GRADIO_PORT` – port on which the UI will listen\n"
-            "- `IMAGE_SIZE` – default input size (default 384)\n"
-            "- `TWO_PASSES` – `1` to enable the two‑pass refinement\n"
-        ),
-        allow_flagging="never",   # <‑‑ add this
+            else:
+                scale_y = max(1, 11 / (boxes_predicted[:, 2] - boxes_predicted[:, 0]).mean())
+                scale_x = max(1, 11 / (boxes_predicted[:, 3] - boxes_predicted[:, 1]).mean())
+
+                if scale_y > 1.9:
+                    scale_y = 1.9
+                if scale_x > 1.9:
+                    scale_x = 1.9
+
+                scale_x = (int(args.image_size * scale_x) // 8 * 8) / args.image_size
+                scale_y = (int(args.image_size * scale_y) // 8 * 8) / args.image_size
+                resize_ = T.Resize((int(args.image_size * scale_x), int(args.image_size * scale_y)), antialias=True)
+                img_resized = resize_(img)
+
+            if scale_x != 1.0 or scale_y != 1.0:
+                denisty_map, _, _, predicted_bboxes = model(img_resized, bboxes)
+
+        pred_boxes = predicted_bboxes.box.cpu() / torch.tensor([scale_y*scale[0], scale_x*scale[1], scale_y*scale[0], scale_x*scale[1]])
+
+        plt.clf()
+        w, h = image.size
+        figsize = (w + 100) / float(dpi), (h + 100) / float(dpi)
+        plt.rcParams["figure.figsize"] = figsize
+        plt.imshow(image)
+        for i in range(len(pred_boxes)):
+            box = pred_boxes[i]
+            plt.plot([box[0], box[0], box[2], box[2], box[0]], [box[1], box[3], box[3], box[1], box[1]], linewidth=2,
+                    color='red')
+        plt.title("Dmap count:" + str(round(denisty_map.sum().item(), 1)) + " Box count:" + str(len(pred_boxes)))
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        plt.close(fig)  # free memory
+        buf.seek(0)
+        return buf.getvalue()   # bytes
+
+        # if args.show:
+        #     plt.show()
+        # else:
+        #     out_file = args.out_path / f"{img_path.stem}__out.png"
+        #     plt.savefig(out_file, bbox_inches='tight')
+
+
+    iface = gr.Interface(
+        fn=one_img,
+        inputs=gr.Image(type="pil", label="Upload an image"),
+        outputs=gr.Image(type="pil", label="Output plot"),
+        title="DAVE Zero-Shot Counting (Gradio)",
+        description=( "Upload an image - the model predicts a density map and bounding boxes." ),
+        allow_flagging="never",
     )
 
-# ------------------------------------------------------------------
-# 5️⃣  Main entry point
-# ------------------------------------------------------------------
-if __name__ == "__main__":
-    iface = create_interface()
-    iface.launch(
-        share=False,
-        server_port=GRADIO_PORT,
-        server_name="0.0.0.0",
-    )
+    iface.launch(server_name="0.0.0.0", server_port=int(os.getenv('GRADIO_PORT', '7860')), share=False)
+
+
+    
+    # if args.img_path.is_file():
+    #     one_img(args.img_path)
+    # elif args.img_path.is_dir():
+    #     for img_p in (imgs := tqdm(list(args.img_path.iterdir()))):
+    #         imgs.set_description(f"{img_p.name:>30}")
+    #         one_img(img_p)
+    # else:
+    #     raise(ValueError, f"{args.img_path} is neither a dir nor a file :(")
+
+    
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('DAVE', parents=[get_argparser()])
+    # parser.add_argument('--img_path', type=Path)
+    # parser.add_argument('--out_path', type=Path, default="material")
+    # parser.add_argument('--show', action='store_true')
+    parser.add_argument('--two_passes', action='store_true')
+    args = parser.parse_args()
+    
+    demo(args)

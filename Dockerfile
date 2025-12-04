@@ -66,9 +66,7 @@ EXPOSE ${GRADIO_PORT}
 # 🔟  Final command – run demo_zero_gradio.py with the fixed arguments
 #     (plain‑text CMD – Docker will invoke /bin/sh -c automatically)
 # ───────────────────────────────────────────────────────────────────────────────
-CMD conda run -n dave python demo_zero_gradio.py \
-    --img_path /app/input/test.jpg \
-    --show \
+CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_zero_gradio.py \
     --zero_shot \
     --two_passes \
     --skip_train \
@@ -86,4 +84,4 @@ CMD conda run -n dave python demo_zero_gradio.py \
     --use_objectness \
     --use_appearance \
     --batch_size 1 \
-    --pre_norm
+    --pre_norm"
