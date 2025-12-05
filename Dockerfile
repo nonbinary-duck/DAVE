@@ -30,6 +30,20 @@ RUN conda create -n dave python=3.8 -y && \
         numpy scikit-image scikit-learn tqdm pycocotools transformers \
         gradio==4.44.1          # <‑‑ fixed Gradio version
 
+# ──────────────────────────────────────────────────────────────
+#  Download the pretrained weights that your model needs
+# ──────────────────────────────────────────────────────────────
+RUN conda run -n dave python - <<'PY'
+import torch
+# 1️⃣  ResNet‑50 (the backbone you’re using)
+torch.hub.load('pytorch/vision', 'resnet50', pretrained=True)
+
+# 3️⃣  CLIP (image‑text encoder/processor that you instantiate in `__init__`)
+from transformers import CLIPModel, CLIPProcessor
+CLIPModel.from_pretrained('openai/clip-vit-large-patch14')
+CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14')
+PY
+
 # ───────────────────────────────────────────────────────────────────────────────
 # 5️⃣  Copy all .pth checkpoints into the image
 # ───────────────────────────────────────────────────────────────────────────────

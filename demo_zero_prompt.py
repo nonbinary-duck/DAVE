@@ -12,6 +12,8 @@ from utils.arg_parser import get_argparser
 from models.dave import build_model
 from utils.data import pad_image
 
+from typing import List, Optional
+
 
 def resize(img, img_size):
     resize_img = T.Resize((img_size, img_size), antialias=True)
@@ -24,11 +26,9 @@ def resize(img, img_size):
     scale = torch.tensor([1.0, 1.0]) / torch.tensor([w, h]) * img_size
     return img, scale
 
-from typing import List, Optional
-
 def parse_categories(text: Optional[str]) -> List[str]:
     """
-    Convert a comma‑separated string into a list.
+    Convert a comma-separated string into a list.
     - Trims whitespace around each item.
     - Ignores empty items (e.g. 'a,,b' → ['a', 'b']).
     - Handles None → [].
@@ -68,13 +68,13 @@ def demo(args):
 
     bboxes = torch.zeros((1, 3, 4))
 
-    def one_img(img_path):
+    def one_img(img_path, prompts):
         scale_x = scale_y = 1
         image = Image.open(img_path).convert("RGB")
         img, scale = resize(image, args.image_size)
         img = img.unsqueeze(0).to(device)
 
-        denisty_map, _, _, predicted_bboxes = model(img, bboxes=bboxes)
+        denisty_map, _, _, predicted_bboxes = model(img, bboxes=bboxes, classes=prompts)
 
         if args.two_passes:
             boxes_predicted = predicted_bboxes.box
@@ -125,11 +125,11 @@ def demo(args):
             plt.savefig(out_file, bbox_inches='tight')
 
     if args.img_path.is_file():
-        one_img(args.img_path)
+        one_img(args.img_path, prompts)
     elif args.img_path.is_dir():
         for img_p in (imgs := tqdm(list(args.img_path.iterdir()))):
             imgs.set_description(f"{img_p.name:>30}")
-            one_img(img_p)
+            one_img(img_p, prompts)
     else:
         raise(ValueError, f"{args.img_path} is neither a dir nor a file :(")
 
