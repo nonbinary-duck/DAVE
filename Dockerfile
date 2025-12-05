@@ -27,7 +27,7 @@ RUN conda create -n dave python=3.8 -y && \
         pytorch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 pytorch-cuda=11.8 \
         -c pytorch -c nvidia && \
     conda run -n dave pip install \
-        numpy scikit-image scikit-learn tqdm pycocotools \
+        numpy scikit-image scikit-learn tqdm pycocotools transformers \
         gradio==4.44.1          # <‑‑ fixed Gradio version
 
 # ───────────────────────────────────────────────────────────────────────────────
