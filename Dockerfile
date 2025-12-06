@@ -27,22 +27,41 @@ RUN conda create -n dave python=3.8 -y && \
         pytorch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 pytorch-cuda=11.8 \
         -c pytorch -c nvidia && \
     conda run -n dave pip install \
-        numpy scikit-image scikit-learn tqdm pycocotools transformers \
+        numpy scikit-image scikit-learn tqdm pycocotools transformers opencv-python-headless \
         gradio==4.44.1          # <‑‑ fixed Gradio version
 
 # ──────────────────────────────────────────────────────────────
 #  Download the pretrained weights that your model needs
 # ──────────────────────────────────────────────────────────────
-RUN conda run -n dave python - <<'PY'
-import torch
-# 1️⃣  ResNet‑50 (the backbone you’re using)
-torch.hub.load('pytorch/vision', 'resnet50', pretrained=True)
+# RUN <<EOT conda run -n dave python -c "
+#     from transformers import CLIPModel, CLIPProcessor
+#     import torch
 
-# 3️⃣  CLIP (image‑text encoder/processor that you instantiate in `__init__`)
-from transformers import CLIPModel, CLIPProcessor
+
+#     # 3️⃣  CLIP (image-text encoder/processor that you instantiate in `__init__`)
+#     CLIPModel.from_pretrained('openai/clip-vit-large-patch14')
+#     CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14')
+
+#     # 1️⃣  ResNet-50 (the backbone you're using)
+#     torch.hub.load('pytorch/vision', 'resnet50', pretrained=True)
+#     torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/deepcluster/swav_800ep_pretrain.pth.tar', map_location='cpu')
+#     "
+# EOT
+
+RUN <<EOT bash
+conda run -n dave python -c "from transformers import CLIPModel, CLIPProcessor
+import torch
+
+
+# 3️⃣  CLIP (image-text encoder/processor that you instantiate in `__init__`)
 CLIPModel.from_pretrained('openai/clip-vit-large-patch14')
 CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14')
-PY
+
+# 1️⃣  ResNet-50 (the backbone you're using)
+torch.hub.load('pytorch/vision', 'resnet50', pretrained=True)
+torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/deepcluster/swav_800ep_pretrain.pth.tar', map_location='cpu')
+"
+EOT
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 5️⃣  Copy all .pth checkpoints into the image
@@ -62,6 +81,8 @@ ARG GRADIO_PORT=7860
 ARG MODEL_PATH=/app/DAVE/weights
 ARG IMAGE_SIZE=384
 ARG CUDA_VISIBLE_DEVICES=0
+ARG PROMPT_TXT='strawberries'
+ARG IMG_PTH='/examples/neat_mix.jpg'
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 8️⃣  Environment variables (set at runtime)
@@ -70,6 +91,8 @@ ENV GRADIO_PORT=${GRADIO_PORT}
 ENV MODEL_PATH=${MODEL_PATH}
 ENV IMAGE_SIZE=${IMAGE_SIZE}
 ENV CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}
+ENV PROMPT_TXT=${PROMPT_TXT}
+ENV IMG_PTH=${IMG_PTH}
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 9️⃣  Expose the Gradio UI port (even if we’re not launching Gradio now)
@@ -80,8 +103,12 @@ EXPOSE ${GRADIO_PORT}
 # 🔟  Final command – run demo_zero_gradio.py with the fixed arguments
 #     (plain‑text CMD – Docker will invoke /bin/sh -c automatically)
 # ───────────────────────────────────────────────────────────────────────────────
-CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_zero_gradio.py \
+
+CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_zero_prompt.py \
     --prompt_shot \
+    --prompts_txt ${PROMPT_TXT}\
+    --img_path ${IMG_PTH} \
+    --out_path /examples/ \
     --zero_shot \
     --two_passes \
     --skip_train \

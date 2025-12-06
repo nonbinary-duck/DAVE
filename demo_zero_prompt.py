@@ -14,6 +14,11 @@ from utils.data import pad_image
 
 from typing import List, Optional
 
+import cv2
+import numpy as np
+import torch.nn.functional as F
+
+
 
 def resize(img, img_size):
     resize_img = T.Resize((img_size, img_size), antialias=True)
@@ -76,6 +81,8 @@ def demo(args):
 
         denisty_map, _, _, predicted_bboxes = model(img, bboxes=bboxes, classes=prompts)
 
+        print(f"== Prompts: {prompts}")
+
         if args.two_passes:
             boxes_predicted = predicted_bboxes.box
             scale_y = min(1, 50 / (boxes_predicted[:, 2] - boxes_predicted[:, 0]).mean())
@@ -118,6 +125,26 @@ def demo(args):
             plt.plot([box[0], box[0], box[2], box[2], box[0]], [box[1], box[3], box[3], box[1], box[1]], linewidth=2,
                     color='red')
         plt.title("Dmap count:" + str(round(denisty_map.sum().item(), 1)) + " Box count:" + str(len(pred_boxes)))
+
+        # --------------------------------------------------------------------
+        # Overlay the density map on the original image
+        # --------------------------------------------------------------------
+        # 1️⃣  Make sure the density map matches the image resolution
+        dens = denisty_map.squeeze()          # shape: (1, H', W')
+        if dens.shape[-1] != image.width or dens.shape[-2] != image.height:
+            dens = F.interpolate(denisty_map, size=(image.height, image.width),
+                                 mode='bilinear', align_corners=False).squeeze()
+
+        # 2️⃣  Normalise the density values to [0, 1] for display
+        dens_np = dens.cpu().numpy()
+        dens_np -= dens_np.min()
+        dens_np /= dens_np.max() + 1e-6  # avoid division by zero
+
+        # 3️⃣  Overlay with 50 % opacity (alpha=0.5) using viridis
+        plt.imshow(dens_np, cmap='viridis', alpha=0.8, zorder=1)
+
+        # (The boxes plotted earlier are already at zorder=2, so they stay on top)
+
         if args.show:
             plt.show()
         else:

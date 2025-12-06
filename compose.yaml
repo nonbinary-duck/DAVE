@@ -14,10 +14,14 @@ services:
       - IMAGE_SIZE=384
       - CUDA_VISIBLE_DEVICES=0    # set to '' if you don’t want to expose a GPU
       - PYTHONUNBUFFERED=1
+      - PROMPT_TXT='strawberries'
+      - IMG_PTH='/examples/neat_mix.jpg'
 
     ports:
       - "7860:7860"          # host_port:container_port
 
+    volumes:
+      - ./examples:/examples/:rw
 
     # --------------------------------------------------------------------
     # 2️⃣  Request a GPU – adjust if you’re on Swarm or single‑node Docker‑Compose
