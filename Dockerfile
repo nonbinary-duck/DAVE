@@ -105,11 +105,9 @@ EXPOSE ${GRADIO_PORT}
 #     (plain‑text CMD – Docker will invoke /bin/sh -c automatically)
 # ───────────────────────────────────────────────────────────────────────────────
 
-CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_zero_prompt.py \
+
+CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_prompt_gradio.py \
     --prompt_shot \
-    --prompts_txt ${PROMPT_TXT}\
-    --img_path ${IMG_PTH} \
-    --out_path /examples/ \
     --zero_shot \
     --two_passes \
     --skip_train \
@@ -128,3 +126,27 @@ CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && 
     --use_appearance \
     --batch_size 1 \
     --pre_norm"
+
+# CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_zero_prompt.py \
+#     --prompt_shot \
+#     --prompts_txt ${PROMPT_TXT}\
+#     --img_path ${IMG_PTH} \
+#     --out_path /examples/ \
+#     --zero_shot \
+#     --two_passes \
+#     --skip_train \
+#     --model_name DAVE_0_shot \
+#     --model_path $MODEL_PATH \
+#     --backbone resnet50 \
+#     --swav_backbone \
+#     --reduction 8 \
+#     --num_enc_layers 3 \
+#     --num_dec_layers 3 \
+#     --kernel_dim 3 \
+#     --emb_dim 256 \
+#     --num_objects 3 \
+#     --num_workers 8 \
+#     --use_objectness \
+#     --use_appearance \
+#     --batch_size 1 \
+#     --pre_norm"

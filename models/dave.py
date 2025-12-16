@@ -447,6 +447,8 @@ class COTR(nn.Module):
             preds = generated_bboxes
 
             k, _, _ = self.eigenDecomposition(dst_mtx)
+            print(f"Decomposed {max(k)} clusters")
+            
             if len(k) > 1 or (len(k) > 1 and k[0] > 1):
                 print("Squirrel")
                 n_clusters_ = max(k)
@@ -476,7 +478,7 @@ class COTR(nn.Module):
                 print(f"Correct_c: {correct_clusters}")
                 
 
-            return outputR, [], tblr, preds
+            return outputR, [], tblr, preds, max(k)
 
         elif self.zero_shot and not self.prompt_shot:
             k, _, _ = self.eigenDecomposition(dst_mtx)
