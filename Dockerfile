@@ -46,7 +46,11 @@ from transformers import CLIPModel, CLIPProcessor
 def main() -> None:
     print("Downloading ResNet‑50 (pre‑trained on ImageNet)...")
     torch.hub.load("pytorch/vision", "resnet50", pretrained=True)
-    print("✅ ResNet‑50 cached.")
+    print("✅ ResNet-50 cached.")
+
+    print("Downloading SWAV...")
+    torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/deepcluster/swav_800ep_pretrain.pth.tar', map_location='cpu')
+    print("✅ SWAV cached.")
 
     print("Downloading CLIP model and processor (openai/clip-vit-large-patch14)...")
     CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
