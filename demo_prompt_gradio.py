@@ -124,27 +124,18 @@ def demo(args):
                         img_resized = resize_(img)
 
                     if scale_x != 1.0 or scale_y != 1.0:
-                        denisty_map, _, _, predicted_bboxes = model(img_resized, bboxes)
+                        denisty_map, _, _, predicted_bboxes, clusters = model(img, bboxes=bboxes, classes=prompts)
 
                 pred_boxes = predicted_bboxes.box.cpu() / torch.tensor([scale_y*scale[0], scale_x*scale[1], scale_y*scale[0], scale_x*scale[1]])
 
-                plt.clf()
-                fig = plt.figure()
+                # ------------------------------------------------------------------
+                # Overlay density map and bounding boxes using OpenCV (cv2)
+                # ------------------------------------------------------------------
+                # Convert the original PIL image to a NumPy array (BGR for cv2)
+                img_cv = np.array(image)[:, :, ::-1]  # RGB → BGR
 
-                w, h = image.size
-                figsize = (w + 100) / float(dpi), (h + 100) / float(dpi)
-                plt.rcParams["figure.figsize"] = figsize
-                plt.imshow(image)
-                for i in range(len(pred_boxes)):
-                    box = pred_boxes[i]
-                    plt.plot([box[0], box[0], box[2], box[2], box[0]], [box[1], box[3], box[3], box[1], box[1]], linewidth=2,
-                            color='red')
-                plt.title("Dmap count:" + str(round(denisty_map.sum().item(), 1)) + " Box count:" + str(len(pred_boxes)))
-
-                # --------------------------------------------------------------------
-                # Overlay the density map on the original image
-                # --------------------------------------------------------------------
-                # 1️⃣  Make sure the density map matches the image resolution
+                # Prepare the density map for overlay:
+                                # 1️⃣  Make sure the density map matches the image resolution
                 dens = denisty_map.squeeze()          # shape: (1, H', W')
                 if dens.shape[-1] != image.width or dens.shape[-2] != image.height:
                     dens = F.interpolate(denisty_map, size=(image.height, image.width),
@@ -155,29 +146,30 @@ def demo(args):
                 dens_np -= dens_np.min()
                 dens_np /= dens_np.max() + 1e-6  # avoid division by zero
 
-                # 3️⃣  Overlay with 50 % opacity (alpha=0.5) using viridis
-                plt.imshow(dens_np, cmap='viridis', alpha=0.8, zorder=1)
+                # dens_np is already normalized to [0, 1]
+                dens_uint8 = (dens_np * 255).astype(np.uint8)          # 0‑255 single channel
+                # Apply a colormap (use JET as a close approximation to viridis)
+                dens_colored = cv2.applyColorMap(dens_uint8, cv2.COLORMAP_JET)
 
-                # (The boxes plotted earlier are already at zorder=2, so they stay on top)
+                # Blend the colored density map with the original image
+                overlay = cv2.addWeighted(dens_colored, 0.8, img_cv, 0.2, 0)
 
-                # if args.show:
-                #     plt.show()
-                # else:
-                #     out_file = args.out_path / f"{img_path.stem}__out.png"
-                #     plt.savefig(out_file, bbox_inches='tight')
+                # Draw the predicted bounding boxes (red, thickness=2)
+                for box in pred_boxes:
+                    x1, y1, x2, y2 = map(int, box.tolist())
+                    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-                buf = io.BytesIO()
-                fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
-                plt.close(fig)  # free memory
-                buf.seek(0)
-                # Convert the bytes buffer back to a PIL image so that Gradio
-                # can handle the output correctly (type="pil").
-                out_img = Image.open(buf).convert("RGB")
+                # Convert the result back to a PIL image for Gradio
+                out_img = Image.fromarray(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
 
-                out_info = f"= Found {clusters} clusters\n= Density sum {denisty_map.sum().item()}\n= Count of boxes {len(pred_boxes)}"
-                
+                # Prepare the info string for the second output panel
+                out_info = (
+                    f"= Found {clusters} clusters\n"
+                    f"= Density sum {denisty_map.sum().item()}\n"
+                    f"= Count of boxes {len(pred_boxes)}"
+                )
                 return out_img, out_info
-        except:
+        except RuntimeError as ex:
             raise gr.Error("Not enough VRAM at the moment 💥! Try again in 5 mins.", duration=10)
 
     
