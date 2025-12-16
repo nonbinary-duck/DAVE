@@ -30,38 +30,35 @@ RUN conda create -n dave python=3.8 -y && \
         numpy scikit-image scikit-learn tqdm pycocotools transformers opencv-python-headless \
         gradio==4.44.1          # <‑‑ fixed Gradio version
 
-# ──────────────────────────────────────────────────────────────
-#  Download the pretrained weights that your model needs
-# ──────────────────────────────────────────────────────────────
-# RUN <<EOT conda run -n dave python -c "
-#     from transformers import CLIPModel, CLIPProcessor
-#     import torch
-
-
-#     # 3️⃣  CLIP (image-text encoder/processor that you instantiate in `__init__`)
-#     CLIPModel.from_pretrained('openai/clip-vit-large-patch14')
-#     CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14')
-
-#     # 1️⃣  ResNet-50 (the backbone you're using)
-#     torch.hub.load('pytorch/vision', 'resnet50', pretrained=True)
-#     torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/deepcluster/swav_800ep_pretrain.pth.tar', map_location='cpu')
-#     "
-# EOT
-
-RUN <<EOT bash
-conda run -n dave python -c "from transformers import CLIPModel, CLIPProcessor
+# ------------------------------------------------------------------
+# 4️⃣  Write the preload helper script *inline* and run it
+# ------------------------------------------------------------------
+RUN cat <<'PY' > /tmp/preload_checkpoints.py
+"""
+preload_checkpoints.py
+Downloads ResNet‑50 and CLIP checkpoints
+while building the Docker image, so they’re cached
+in the container’s image layer.
+"""
 import torch
+from transformers import CLIPModel, CLIPProcessor
 
+def main() -> None:
+    print("Downloading ResNet‑50 (pre‑trained on ImageNet)...")
+    torch.hub.load("pytorch/vision", "resnet50", pretrained=True)
+    print("✅ ResNet‑50 cached.")
 
-# 3️⃣  CLIP (image-text encoder/processor that you instantiate in `__init__`)
-CLIPModel.from_pretrained('openai/clip-vit-large-patch14')
-CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14')
+    print("Downloading CLIP model and processor (openai/clip-vit-large-patch14)...")
+    CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+    CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+    print("✅ CLIP cached.")
 
-# 1️⃣  ResNet-50 (the backbone you're using)
-torch.hub.load('pytorch/vision', 'resnet50', pretrained=True)
-torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/deepcluster/swav_800ep_pretrain.pth.tar', map_location='cpu')
-"
-EOT
+if __name__ == "__main__":
+    main()
+PY
+
+# Execute the script inside the `dave` environment
+RUN conda run -n dave python /tmp/preload_checkpoints.py
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 5️⃣  Copy all .pth checkpoints into the image

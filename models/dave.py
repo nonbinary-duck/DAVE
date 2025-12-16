@@ -442,10 +442,13 @@ class COTR(nn.Module):
         dst_mtx[dst_mtx < 0] = 0
 
         if self.zero_shot and self.prompt_shot:
+            print("Wolf")
+            
             preds = generated_bboxes
 
             k, _, _ = self.eigenDecomposition(dst_mtx)
             if len(k) > 1 or (len(k) > 1 and k[0] > 1):
+                print("Squirrel")
                 n_clusters_ = max(k)
                 spectral = SpectralClustering(n_clusters=n_clusters_, affinity='precomputed')
                 labels = spectral.fit_predict(dst_mtx)
@@ -459,6 +462,7 @@ class COTR(nn.Module):
                     mask = np.in1d(box_labels, lab).reshape(box_labels.shape)
                     probs.append(self.clip_check_clusters(x_img, bboxes_p[mask], classes, img_name=name).item())
                     correct_clusters.append(lab)
+
                 thresh = max(probs) * 0.85
                 correct = np.array(probs) > thresh
                 correct_clusters = np.array(correct_clusters)[correct]
@@ -467,6 +471,10 @@ class COTR(nn.Module):
 
                 if len(preds) != len(generated_bboxes):
                     outputR[0][0] = mask_density(outputR[0], preds)
+
+                print(f"Correct:   {correct}")
+                print(f"Correct_c: {correct_clusters}")
+                
 
             return outputR, [], tblr, preds
 
