@@ -3,7 +3,7 @@ services:
     build: .
     image: dave_app:latest
     container_name: dave
-    restart: unless-stopped
+    restart: no
 
     # --------------------------------------------------------------------
     # 1️⃣  Runtime knobs – override the Dockerfile defaults

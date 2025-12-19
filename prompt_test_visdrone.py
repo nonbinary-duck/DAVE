@@ -32,6 +32,7 @@ from io import BytesIO
 
 from tqdm import tqdm
 import time
+import base64
 
 
 # ------------------------------------------------------------------
@@ -55,6 +56,14 @@ client   = MongoClient(MONGO_URI)
 db       = client[DB_NAME]
 coll     = db[COL_NAME]
 
+# ------------------------------------------------------------------------------
+#  Keep running totals of macro‑metrics to compute running means
+macro_mae_density_list = []
+macro_mae_box_list     = []
+macro_rmse_density_list = []   # RMSE from density‑sum
+macro_rmse_box_list     = []   # RMSE from predicted‑box count
+image_counter          = 0
+
 
 # ------------------------------------------------------------------
 #  Helper: extract ground‑truth counts from the .txt file
@@ -62,13 +71,22 @@ def get_gt_counts(ann_path):
     counts = {c: 0 for c in CATEGORIES}
     with open(ann_path, "r") as f:
         for line in f:
-            if not line.strip():  # skip empty lines
+            line = line.strip()
+            if not line:
                 continue
-            cls_id = int(line.split()[0]) - 1  # 1‑based → 0‑based
+            # VisDrone uses comma‑separated format:
+            #   id, x, y, w, h, cls, ...
+            parts = line.split(',')
+            if len(parts) < 6:
+                continue  # malformed line
+            try:
+                cls_id = int(parts[5]) - 1   # class id is 1‑based
+            except ValueError:
+                continue  # skip lines where cls field is not an int
             if 0 <= cls_id < len(CATEGORIES):
                 counts[CATEGORIES[cls_id]] += 1
-    return counts
 
+    return counts
 
 _model_lock = threading.Lock()
 
@@ -99,6 +117,7 @@ def parse_categories(text: Optional[str]) -> List[str]:
 
 @torch.no_grad()
 def demo(args):
+    global image_counter
     # global fig, ax
 
     prompts = parse_categories(args.prompts_txt)
@@ -128,95 +147,92 @@ def demo(args):
 
     @torch.no_grad()
     def one_img(image: Image.Image, prompts_txt: str):
-        try:
-            with _model_lock:
-                scale_x = scale_y = 1
-                # image = Image.open(img_path).convert("RGB")
-                img, scale = resize(image, args.image_size)
-                img = img.unsqueeze(0).to(device)
+        with _model_lock:
+            scale_x = scale_y = 1
+            # image = Image.open(img_path).convert("RGB")
+            img, scale = resize(image, args.image_size)
+            img = img.unsqueeze(0).to(device)
 
-                # Convert the raw text to a Python list
-                prompts = [p.strip() for p in prompts_txt.splitlines() if p.strip()]
+            # Convert the raw text to a Python list
+            prompts = [p.strip() for p in prompts_txt.splitlines() if p.strip()]
 
-                denisty_map, _, _, predicted_bboxes, clusters = model(img, bboxes=bboxes, classes=prompts)
+            denisty_map, _, _, predicted_bboxes, clusters = model(img, bboxes=bboxes, classes=prompts)
 
-                print(f"== Prompts: {prompts}")
+            print(f"== Prompts: {prompts}")
 
-                if args.two_passes:
-                    boxes_predicted = predicted_bboxes.box
-                    scale_y = min(1, 50 / (boxes_predicted[:, 2] - boxes_predicted[:, 0]).mean())
-                    scale_x = min(1, 50 / (boxes_predicted[:, 3] - boxes_predicted[:, 1]).mean())
+            if args.two_passes:
+                boxes_predicted = predicted_bboxes.box
+                scale_y = min(1, 50 / (boxes_predicted[:, 2] - boxes_predicted[:, 0]).mean())
+                scale_x = min(1, 50 / (boxes_predicted[:, 3] - boxes_predicted[:, 1]).mean())
 
-                    if scale_x < 1 or scale_y < 1:
-                        scale_x = (int(args.image_size * scale_x) // 8 * 8) / args.image_size
-                        scale_y = (int(args.image_size * scale_y) // 8 * 8) / args.image_size
-                        resize_ = T.Resize((int(args.image_size * scale_x), int(args.image_size * scale_y)), antialias=True)
-                        img_resized = resize_(img)
+                if scale_x < 1 or scale_y < 1:
+                    scale_x = (int(args.image_size * scale_x) // 8 * 8) / args.image_size
+                    scale_y = (int(args.image_size * scale_y) // 8 * 8) / args.image_size
+                    resize_ = T.Resize((int(args.image_size * scale_x), int(args.image_size * scale_y)), antialias=True)
+                    img_resized = resize_(img)
 
-                        img_resized = pad_image(img_resized[0]).unsqueeze(0)
+                    img_resized = pad_image(img_resized[0]).unsqueeze(0)
 
-                    else:
-                        scale_y = max(1, 11 / (boxes_predicted[:, 2] - boxes_predicted[:, 0]).mean())
-                        scale_x = max(1, 11 / (boxes_predicted[:, 3] - boxes_predicted[:, 1]).mean())
+                else:
+                    scale_y = max(1, 11 / (boxes_predicted[:, 2] - boxes_predicted[:, 0]).mean())
+                    scale_x = max(1, 11 / (boxes_predicted[:, 3] - boxes_predicted[:, 1]).mean())
 
-                        if scale_y > 1.9:
-                            scale_y = 1.9
-                        if scale_x > 1.9:
-                            scale_x = 1.9
+                    if scale_y > 1.9:
+                        scale_y = 1.9
+                    if scale_x > 1.9:
+                        scale_x = 1.9
 
-                        scale_x = (int(args.image_size * scale_x) // 8 * 8) / args.image_size
-                        scale_y = (int(args.image_size * scale_y) // 8 * 8) / args.image_size
-                        resize_ = T.Resize((int(args.image_size * scale_x), int(args.image_size * scale_y)), antialias=True)
-                        img_resized = resize_(img)
+                    scale_x = (int(args.image_size * scale_x) // 8 * 8) / args.image_size
+                    scale_y = (int(args.image_size * scale_y) // 8 * 8) / args.image_size
+                    resize_ = T.Resize((int(args.image_size * scale_x), int(args.image_size * scale_y)), antialias=True)
+                    img_resized = resize_(img)
 
-                    if scale_x != 1.0 or scale_y != 1.0:
-                        denisty_map, _, _, predicted_bboxes, clusters = model(img, bboxes=bboxes, classes=prompts)
+                if scale_x != 1.0 or scale_y != 1.0:
+                    denisty_map, _, _, predicted_bboxes, clusters = model(img, bboxes=bboxes, classes=prompts)
 
-                pred_boxes = predicted_bboxes.box.cpu() / torch.tensor([scale_y*scale[0], scale_x*scale[1], scale_y*scale[0], scale_x*scale[1]])
+            pred_boxes = predicted_bboxes.box.cpu() / torch.tensor([scale_y*scale[0], scale_x*scale[1], scale_y*scale[0], scale_x*scale[1]])
 
-                # ------------------------------------------------------------------
-                # Overlay density map and bounding boxes using OpenCV (cv2)
-                # ------------------------------------------------------------------
-                # Convert the original PIL image to a NumPy array (BGR for cv2)
-                img_cv = np.array(image)[:, :, ::-1]  # RGB → BGR
+            # ------------------------------------------------------------------
+            # Overlay density map and bounding boxes using OpenCV (cv2)
+            # ------------------------------------------------------------------
+            # Convert the original PIL image to a NumPy array (BGR for cv2)
+            img_cv = np.array(image)[:, :, ::-1]  # RGB → BGR
 
-                # Prepare the density map for overlay:
-                                # 1️⃣  Make sure the density map matches the image resolution
-                dens = denisty_map.squeeze()          # shape: (1, H', W')
-                if dens.shape[-1] != image.width or dens.shape[-2] != image.height:
-                    dens = F.interpolate(denisty_map, size=(image.height, image.width),
-                                        mode='bilinear', align_corners=False).squeeze()
+            # Prepare the density map for overlay:
+                            # 1️⃣  Make sure the density map matches the image resolution
+            dens = denisty_map.squeeze()          # shape: (1, H', W')
+            if dens.shape[-1] != image.width or dens.shape[-2] != image.height:
+                dens = F.interpolate(denisty_map, size=(image.height, image.width),
+                                    mode='bilinear', align_corners=False).squeeze()
 
-                # 2️⃣  Normalise the density values to [0, 1] for display
-                dens_np = dens.cpu().numpy()
-                dens_np -= dens_np.min()
-                dens_np /= dens_np.max() + 1e-6  # avoid division by zero
+            # 2️⃣  Normalise the density values to [0, 1] for display
+            dens_np = dens.cpu().numpy()
+            dens_np -= dens_np.min()
+            dens_np /= dens_np.max() + 1e-6  # avoid division by zero
 
-                # dens_np is already normalized to [0, 1]
-                dens_uint8 = (dens_np * 255).astype(np.uint8)          # 0‑255 single channel
-                # Apply a colormap (use JET as a close approximation to viridis)
-                dens_colored = cv2.applyColorMap(dens_uint8, cv2.COLORMAP_JET)
+            # dens_np is already normalized to [0, 1]
+            dens_uint8 = (dens_np * 255).astype(np.uint8)          # 0‑255 single channel
+            # Apply a colormap (use JET as a close approximation to viridis)
+            dens_colored = cv2.applyColorMap(dens_uint8, cv2.COLORMAP_JET)
 
-                # Blend the colored density map with the original image
-                overlay = cv2.addWeighted(dens_colored, 0.8, img_cv, 0.2, 0)
+            # Blend the colored density map with the original image
+            overlay = cv2.addWeighted(dens_colored, 0.8, img_cv, 0.2, 0)
 
-                # Draw the predicted bounding boxes (red, thickness=2)
-                for box in pred_boxes:
-                    x1, y1, x2, y2 = map(int, box.tolist())
-                    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            # Draw the predicted bounding boxes (red, thickness=2)
+            for box in pred_boxes:
+                x1, y1, x2, y2 = map(int, box.tolist())
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-                # Convert the result back to a PIL image for Gradio
-                out_img = Image.fromarray(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
+            # Convert the result back to a PIL image for Gradio
+            out_img = Image.fromarray(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
 
-                # Prepare the info string for the second output panel
-                out_info = (
-                    f"= Found {clusters} clusters\n"
-                    f"= Density sum {denisty_map.sum().item()}\n"
-                    f"= Count of boxes {len(pred_boxes)}"
-                )
-                return out_img, out_info, clusters, denisty_map.sum().item(), len(pred_boxes)
-        except RuntimeError as ex:
-            raise gr.Error("Not enough VRAM at the moment 💥! Try again in 5 mins.", duration=10)
+            # Prepare the info string for the second output panel
+            out_info = (
+                f"= Found {clusters} clusters\n"
+                f"= Density sum {denisty_map.sum().item()}\n"
+                f"= Count of boxes {len(pred_boxes)}"
+            )
+            return out_img, out_info, clusters, denisty_map.sum().item(), len(pred_boxes)
 
     # ------------------------------------------------------------------
     #  Main loop
@@ -258,6 +274,12 @@ def demo(args):
             mse_density = mae_density ** 2
             mse_box     = mae_box ** 2
 
+            # Encode output
+            buf = BytesIO()
+            out_img.save(buf, format="JPEG")
+            png_bytes = buf.getvalue()
+            png_b64   = "data:@file/jpeg;base64," + base64.b64encode(png_bytes).decode('ascii')
+
             # Store per‑category metrics
             per_cat.append({
                 "category"        : cat,
@@ -268,7 +290,8 @@ def demo(args):
                 "mae_box"         : float(mae_box),
                 "mse_density"     : float(mse_density),
                 "mse_box"         : float(mse_box),
-                "clusters"        : clusters
+                "clusters"        : int(clusters),
+                "out_image_b64"   : png_b64
             })
 
             # Accumulate for macro metrics
@@ -276,6 +299,7 @@ def demo(args):
             mae_box_sum     += mae_box
             mse_density_sum += mse_density
             mse_box_sum     += mse_box
+
 
         n_cat = len(CATEGORIES)
 
@@ -300,15 +324,42 @@ def demo(args):
             "timestamp"           : datetime.datetime.utcnow()
         }
 
-        # Store the out‑image as binary (PNG)
-        buf = BytesIO()
-        out_img.save(buf, format="PNG")
-        doc["out_image"] = Binary(buf.getvalue())
+        # # Store the out‑image as binary (PNG)
+        # buf = BytesIO()
+        # out_img.save(buf, format="PNG")
+        # doc["out_image"] = Binary(buf.getvalue())
 
         # Store elapsed time in the document
         doc["processing_time_sec"] = time.perf_counter() - start_time
         
         coll.insert_one(doc)
+
+        # ------------------------------------------------------------------
+        #  Append this image’s macro‑metrics to the running lists
+        macro_mae_density_list.append(macro_mae_density)
+        macro_mae_box_list.append(macro_mae_box)
+        macro_rmse_density_list.append(macro_rmse_density)
+        macro_rmse_box_list.append(macro_rmse_box)
+    
+        # Increment the processed‑image counter
+        image_counter += 1
+    
+        # ------------------------------------------------------------------
+        #  Compute running means of the macro‑metrics
+        mean_macro_mae_density = sum(macro_mae_density_list)  / len(macro_mae_density_list)
+        mean_macro_mae_box     = sum(macro_mae_box_list)      / len(macro_mae_box_list)
+        mean_macro_rmse_den    = sum(macro_rmse_density_list) / len(macro_rmse_density_list)
+        mean_macro_rmse_box    = sum(macro_rmse_box_list)     / len(macro_rmse_box_list)
+    
+        # ------------------------------------------------------------------
+        #  Print a colourful status line with emojis
+        print(
+            f"-- 🖼️ Image {image_counter} processed! \n"
+            f"-- 📊 Macro MAE density:  {mean_macro_mae_density:.4f} | \n"
+            f"-- 📐 Macro MAE box:      {mean_macro_mae_box:.4f} | \n"
+            f"-- 📊 Macro RMSE density: {mean_macro_rmse_den:.4f} 🎉\n"
+            f"-- 📐 Macro RMSE box:     {mean_macro_rmse_box:.4f} 🎉"
+        )
 
         print(f"✅  Processed {img_name} (took {doc['processing_time_sec']:.3f}s)")
 
