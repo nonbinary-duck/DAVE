@@ -22,6 +22,7 @@ services:
 
     volumes:
       - ./examples:/examples/:rw
+      - ./VisDrone:/VisDrone/:r
 
     # --------------------------------------------------------------------
     # 2️⃣  Request a GPU – adjust if you’re on Swarm or single‑node Docker‑Compose
@@ -33,3 +34,24 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  mongo:
+    image: mongo
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example1234
+    volumes:
+      - ./mongo_data:/data/db
+
+
+  mongo-express:
+    image: mongo-express
+    restart: always
+    ports:
+      - 8081:8081
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://root:example1234@mongo:27017/
+      ME_CONFIG_BASICAUTH_ENABLED: true
+      ME_CONFIG_BASICAUTH_USERNAME: mongoexpressuser
+      ME_CONFIG_BASICAUTH_PASSWORD: mongoexpresspass

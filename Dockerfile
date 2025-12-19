@@ -27,7 +27,7 @@ RUN conda create -n dave python=3.8 -y && \
         pytorch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 pytorch-cuda=11.8 \
         -c pytorch -c nvidia && \
     conda run -n dave pip install \
-        numpy scikit-image scikit-learn tqdm pycocotools transformers opencv-python-headless \
+        numpy scikit-image scikit-learn tqdm pycocotools transformers opencv-python-headless pymongo \
         gradio==4.44.1          # <‑‑ fixed Gradio version
 
 # ------------------------------------------------------------------
@@ -106,7 +106,8 @@ EXPOSE ${GRADIO_PORT}
 # ───────────────────────────────────────────────────────────────────────────────
 
 
-CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_prompt_gradio.py \
+# CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python demo_prompt_gradio.py \
+CMD bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate dave && python prompt_test_visdrone.py \
     --prompt_shot \
     --zero_shot \
     --two_passes \
